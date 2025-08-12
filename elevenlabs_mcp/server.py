@@ -224,12 +224,12 @@ def text_to_speech(
     ⚠️ COST WARNING: This tool makes an API call to ElevenLabs which may incur costs. Only use when explicitly requested by the user.
 
     Args:
-        file_path: Path to the audio file to transcribe
-        language_code: ISO 639-3 language code for transcription. If not provided, the language will be detected automatically.
-        diarize: Whether to diarize the audio file. If True, which speaker is currently speaking will be annotated in the transcription.
-        save_transcript_to_file: Whether to save the transcript to a file.
-        return_transcript_to_client_directly: Whether to return the transcript to the client directly.
-        output_directory: Directory where files should be saved (only used when saving files).
+        input_file_path (str): Path to a local audio file or a data URI to transcribe.
+        language_code (str, optional): ISO 639-3 language code for transcription. If not provided, the language will be detected automatically.
+        diarize (bool, optional): Whether to diarize the audio file. If True, which speaker is currently speaking will be annotated in the transcription.
+        save_transcript_to_file (bool, optional): Whether to save the transcript to a file.
+        return_transcript_to_client_directly (bool, optional): Whether to return the transcript to the client directly.
+        output_directory (str, optional): Directory where files should be saved (only used when saving files).
             Defaults to $HOME/Desktop if not provided.
 
     Returns:
@@ -400,6 +400,11 @@ def get_voice(voice_id: str) -> McpVoice:
     description="""Create an instant voice clone of a voice using provided audio files.
 
     ⚠️ COST WARNING: This tool makes an API call to ElevenLabs which may incur costs. Only use when explicitly requested by the user.
+
+    Args:
+        name (str): The name for the new voice.
+        files (list[str]): A list of local audio file paths or data URIs to use for cloning.
+        description (str, optional): A description for the new voice.
     """
 )
 def voice_clone(
@@ -428,6 +433,11 @@ def voice_clone(
     description=f"""Isolate audio from a file. {get_output_mode_description(output_mode)}.
 
     ⚠️ COST WARNING: This tool makes an API call to ElevenLabs which may incur costs. Only use when explicitly requested by the user.
+
+    Args:
+        input_file_path (str): Path to a local audio file or a data URI.
+        output_directory (str, optional): Directory where files should be saved (only used when saving files).
+            Defaults to $HOME/Desktop if not provided.
     """
 )
 def isolate_audio(
@@ -542,11 +552,11 @@ def create_agent(
     ⚠️ COST WARNING: This tool makes an API call to ElevenLabs which may incur costs. Only use when explicitly requested by the user.
 
     Args:
-        agent_id: ID of the agent to add the knowledge base to.
-        knowledge_base_name: Name of the knowledge base.
-        url: URL of the knowledge base.
-        input_file_path: Path to the file to add to the knowledge base.
-        text: Text to add to the knowledge base.
+        agent_id (str): ID of the agent to add the knowledge base to.
+        knowledge_base_name (str): Name of the knowledge base.
+        url (str, optional): URL of the knowledge base.
+        input_file_path (str, optional): Path to a local file or a data URI of the document to add.
+        text (str, optional): Text to add to the knowledge base.
     """
 )
 def add_knowledge_base_to_agent(
@@ -788,6 +798,12 @@ Call Successful: {conv.call_successful}"""
     description=f"""Transform audio from one voice to another using provided audio files. {get_output_mode_description(output_mode)}.
 
     ⚠️ COST WARNING: This tool makes an API call to ElevenLabs which may incur costs. Only use when explicitly requested by the user.
+
+    Args:
+        input_file_path (str): Path to a local audio file or a data URI containing the source speech.
+        voice_name (str, optional): The name of the target voice to transform the speech into. Defaults to "Adam".
+        output_directory (str, optional): Directory where files should be saved (only used when saving files).
+            Defaults to $HOME/Desktop if not provided.
     """
 )
 def speech_to_speech(
@@ -1055,6 +1071,10 @@ def list_phone_numbers() -> TextContent:
 
 @mcp.tool(description="Play an audio file. Supports WAV and MP3 formats.")
 def play_audio(input_file_path: str) -> TextContent:
+    """
+    Args:
+        input_file_path (str): Path to a local audio file or a data URI to play.
+    """
     file_handle = handle_input_file(input_file_path)
 
     # Read from the file handle (always has read method now)
