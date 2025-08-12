@@ -1,10 +1,12 @@
 import os
 import tempfile
 import base64
+import re
 from pathlib import Path
 from datetime import datetime
 from fuzzywuzzy import fuzz
-from typing import Union
+from typing import Union, Tuple
+from io import BytesIO
 from mcp.types import (
     EmbeddedResource,
     TextResourceContents,
@@ -19,6 +21,259 @@ class ElevenLabsMcpError(Exception):
 
 def make_error(error_text: str):
     raise ElevenLabsMcpError(error_text)
+
+
+def is_data_uri(uri: str) -> bool:
+    """
+    Check if a string is a data URI.
+
+    Args:
+        uri: String to check
+
+    Returns:
+        bool: True if the string is a data URI, False otherwise
+    """
+    return uri.startswith("data:")
+
+
+def parse_data_uri(data_uri: str) -> Tuple[bytes, str, str]:
+    """
+    Parse a data URI and extract the data, media type, and file extension.
+
+    Args:
+        data_uri: Data URI string in format: data:[<mediatype>][;base64],<data>
+
+    Returns:
+        Tuple[bytes, str, str]: (decoded_data, media_type, file_extension)
+
+    Raises:
+        ElevenLabsMcpError: If the data URI is invalid or cannot be parsed
+    """
+    if not is_data_uri(data_uri):
+        make_error("Invalid data URI: must start with 'data:'")
+
+    # Remove the 'data:' prefix
+    uri_content = data_uri[5:]
+
+    # Split on the first comma to separate metadata from data
+    if "," not in uri_content:
+        make_error("Invalid data URI: missing comma separator")
+
+    metadata, data = uri_content.split(",", 1)
+
+    # Parse metadata: [<mediatype>][;base64]
+    is_base64 = metadata.endswith(";base64")
+    if is_base64:
+        media_type = metadata[:-7]  # Remove ';base64'
+    else:
+        media_type = metadata
+
+    # Default media type if not specified
+    if not media_type:
+        media_type = "text/plain"
+
+    # Decode the data
+    try:
+        if is_base64:
+            decoded_data = base64.b64decode(data)
+        else:
+            # URL decode and encode as UTF-8
+            import urllib.parse
+
+            decoded_data = urllib.parse.unquote(data).encode("utf-8")
+    except Exception as e:
+        make_error(f"Failed to decode data URI: {str(e)}")
+
+    # Determine file extension from media type
+    file_extension = get_extension_from_mime_type(media_type)
+
+    return decoded_data, media_type, file_extension
+
+
+def get_extension_from_mime_type(mime_type: str) -> str:
+    """
+    Get file extension from MIME type.
+
+    Args:
+        mime_type: MIME type string
+
+    Returns:
+        str: File extension (without dot)
+    """
+    mime_to_ext = {
+        "audio/mpeg": "mp3",
+        "audio/wav": "wav",
+        "audio/wave": "wav",
+        "audio/x-wav": "wav",
+        "audio/ogg": "ogg",
+        "audio/flac": "flac",
+        "audio/mp4": "m4a",
+        "audio/aac": "aac",
+        "audio/opus": "opus",
+        "text/plain": "txt",
+        "application/json": "json",
+        "application/xml": "xml",
+        "text/html": "html",
+        "text/csv": "csv",
+        "application/pdf": "pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/epub+zip": "epub",
+        "video/mp4": "mp4",
+        "video/avi": "avi",
+        "video/quicktime": "mov",
+        "video/x-ms-wmv": "wmv",
+    }
+
+    return mime_to_ext.get(mime_type.lower(), "bin")
+
+
+def create_temp_file_from_data_uri(
+    data_uri: str, audio_content_check: bool = True
+) -> Path:
+    """
+    Create a temporary file from a data URI.
+
+    Args:
+        data_uri: Data URI string
+        audio_content_check: Whether to check if the file is audio/video content
+
+    Returns:
+        Path: Path to the created temporary file
+
+    Raises:
+        ElevenLabsMcpError: If the data URI is invalid or content check fails
+    """
+    decoded_data, media_type, file_extension = parse_data_uri(data_uri)
+
+    # Check if it's audio/video content if required
+    if audio_content_check:
+        audio_extensions = {
+            "wav",
+            "mp3",
+            "m4a",
+            "aac",
+            "ogg",
+            "flac",
+            "mp4",
+            "avi",
+            "mov",
+            "wmv",
+        }
+        if file_extension not in audio_extensions:
+            make_error(
+                f"Data URI contains non-audio/video content (detected type: {media_type})"
+            )
+
+    # Create temporary file with appropriate extension
+    with tempfile.NamedTemporaryFile(
+        suffix=f".{file_extension}", delete=False
+    ) as temp_file:
+        temp_file.write(decoded_data)
+        temp_path = Path(temp_file.name)
+
+    return temp_path
+
+
+def handle_input_file_paths(
+    file_paths: list[str], audio_content_check: bool = True
+) -> Tuple[list[str], list[Path]]:
+    """
+    Handle a list of input file paths, creating temp files for data URIs.
+
+    Args:
+        file_paths: List of file paths or data URIs
+        audio_content_check: Whether to check if files are audio/video content
+
+    Returns:
+        tuple: (list of file paths for API, list of temp files to cleanup)
+    """
+    api_file_paths = []
+    temp_files_to_cleanup = []
+
+    for file_path in file_paths:
+        if is_data_uri(file_path):
+            # Create temp file for data URI
+            temp_path = create_temp_file_from_data_uri(file_path, audio_content_check)
+            api_file_paths.append(str(temp_path.absolute()))
+            temp_files_to_cleanup.append(temp_path)
+        else:
+            # For regular files, we need to validate the path but return the original path string
+            # since the API expects file paths, not file handles
+            if not os.path.isabs(file_path) and not os.environ.get(
+                "ELEVENLABS_MCP_BASE_PATH"
+            ):
+                make_error(
+                    "File path must be an absolute path if ELEVENLABS_MCP_BASE_PATH is not set"
+                )
+            path = Path(file_path)
+            if not path.exists():
+                make_error(f"File ({path}) does not exist")
+            elif not path.is_file():
+                make_error(f"File ({path}) is not a file")
+            if audio_content_check and not check_audio_file(path):
+                make_error(f"File ({path}) is not an audio or video file")
+
+            api_file_paths.append(str(path.absolute()))
+
+    return api_file_paths, temp_files_to_cleanup
+
+
+def cleanup_temp_files(temp_files: list[Path]):
+    """
+    Clean up temporary files, ignoring any errors.
+
+    Args:
+        temp_files: List of temporary file paths to clean up
+    """
+    for temp_file in temp_files:
+        try:
+            if temp_file.exists():
+                temp_file.unlink()
+        except Exception:
+            pass  # Ignore cleanup errors
+
+
+def create_file_like_from_data_uri(
+    data_uri: str, audio_content_check: bool = True
+) -> BytesIO:
+    """
+    Create a file-like BytesIO object from a data URI.
+
+    Args:
+        data_uri: Data URI string
+        audio_content_check: Whether to check if the file is audio/video content
+
+    Returns:
+        BytesIO: File-like object containing the decoded data
+
+    Raises:
+        ElevenLabsMcpError: If the data URI is invalid or content check fails
+    """
+    decoded_data, media_type, file_extension = parse_data_uri(data_uri)
+
+    # Check if it's audio/video content if required
+    if audio_content_check:
+        audio_extensions = {
+            "wav",
+            "mp3",
+            "m4a",
+            "aac",
+            "ogg",
+            "flac",
+            "mp4",
+            "avi",
+            "mov",
+            "wmv",
+        }
+        if file_extension not in audio_extensions:
+            make_error(
+                f"Data URI contains non-audio/video content (detected type: {media_type})"
+            )
+
+    # Create BytesIO object that acts like a file
+    bio = BytesIO(decoded_data)
+    bio.name = f"datauri.{file_extension}"  # Some APIs might need a name
+    return bio
 
 
 def is_file_writeable(path: Path) -> bool:
@@ -119,7 +374,24 @@ def check_audio_file(path: Path) -> bool:
     return path.suffix.lower() in audio_extensions
 
 
-def handle_input_file(file_path: str, audio_content_check: bool = True) -> Path:
+def handle_input_file(
+    file_path: str, audio_content_check: bool = True
+) -> Union[BytesIO, object]:
+    """
+    Handle input file, always returning an open file handle.
+
+    Args:
+        file_path: File path or data URI
+        audio_content_check: Whether to check if the file is audio/video content
+
+    Returns:
+        Union[BytesIO, file]: Open file handle (BytesIO for data URIs, open file for paths)
+    """
+    # Check if input is a data URI
+    if is_data_uri(file_path):
+        return create_file_like_from_data_uri(file_path, audio_content_check)
+
+    # Original file path handling logic
     if not os.path.isabs(file_path) and not os.environ.get("ELEVENLABS_MCP_BASE_PATH"):
         make_error(
             "File path must be an absolute path if ELEVENLABS_MCP_BASE_PATH is not set"
@@ -141,7 +413,10 @@ def handle_input_file(file_path: str, audio_content_check: bool = True) -> Path:
 
     if audio_content_check and not check_audio_file(path):
         make_error(f"File ({path}) is not an audio or video file")
-    return path
+
+    # Return an open file handle
+    file_handle = open(path, "rb")
+    return file_handle
 
 
 def handle_large_text(
