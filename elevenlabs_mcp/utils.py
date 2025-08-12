@@ -14,6 +14,60 @@ from mcp.types import (
     TextContent,
 )
 
+# --- Constants ---
+_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".flac",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".wmv",
+}
+_AUDIO_EXTENSIONS_NO_DOT = {ext.lstrip(".") for ext in _AUDIO_EXTENSIONS}
+
+_MIME_TO_EXT = {
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+    "audio/flac": "flac",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/opus": "opus",
+    "text/plain": "txt",
+    "application/json": "json",
+    "application/xml": "xml",
+    "text/html": "html",
+    "text/csv": "csv",
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/epub+zip": "epub",
+    "video/mp4": "mp4",
+    "video/avi": "avi",
+    "video/quicktime": "mov",
+    "video/x-ms-wmv": "wmv",
+}
+
+_EXT_TO_MIME = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "flac": "audio/flac",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "opus": "audio/opus",
+    "txt": "text/plain",
+    "json": "application/json",
+    "xml": "application/xml",
+    "html": "text/html",
+    "csv": "text/csv",
+}
+
 
 class ElevenLabsMcpError(Exception):
     pass
@@ -100,31 +154,7 @@ def get_extension_from_mime_type(mime_type: str) -> str:
     Returns:
         str: File extension (without dot)
     """
-    mime_to_ext = {
-        "audio/mpeg": "mp3",
-        "audio/wav": "wav",
-        "audio/wave": "wav",
-        "audio/x-wav": "wav",
-        "audio/ogg": "ogg",
-        "audio/flac": "flac",
-        "audio/mp4": "m4a",
-        "audio/aac": "aac",
-        "audio/opus": "opus",
-        "text/plain": "txt",
-        "application/json": "json",
-        "application/xml": "xml",
-        "text/html": "html",
-        "text/csv": "csv",
-        "application/pdf": "pdf",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-        "application/epub+zip": "epub",
-        "video/mp4": "mp4",
-        "video/avi": "avi",
-        "video/quicktime": "mov",
-        "video/x-ms-wmv": "wmv",
-    }
-
-    return mime_to_ext.get(mime_type.lower(), "bin")
+    return _MIME_TO_EXT.get(mime_type.lower(), "bin")
 
 
 def create_temp_file_from_data_uri(
@@ -147,19 +177,7 @@ def create_temp_file_from_data_uri(
 
     # Check if it's audio/video content if required
     if audio_content_check:
-        audio_extensions = {
-            "wav",
-            "mp3",
-            "m4a",
-            "aac",
-            "ogg",
-            "flac",
-            "mp4",
-            "avi",
-            "mov",
-            "wmv",
-        }
-        if file_extension not in audio_extensions:
+        if file_extension not in _AUDIO_EXTENSIONS_NO_DOT:
             make_error(
                 f"Data URI contains non-audio/video content (detected type: {media_type})"
             )
@@ -172,6 +190,45 @@ def create_temp_file_from_data_uri(
         temp_path = Path(temp_file.name)
 
     return temp_path
+
+
+def _validate_local_file(file_path: str, audio_content_check: bool = True) -> Path:
+    """
+    Validate a local file path and return a Path object.
+
+    Args:
+        file_path: The path to the file.
+        audio_content_check: Whether to check if the file is an audio/video file.
+
+    Returns:
+        Path: A Path object for the validated file.
+
+    Raises:
+        ElevenLabsMcpError: If the file path is invalid or the file doesn't exist.
+    """
+    if not os.path.isabs(file_path) and not os.environ.get("ELEVENLABS_MCP_BASE_PATH"):
+        make_error(
+            "File path must be an absolute path if ELEVENLABS_MCP_BASE_PATH is not set"
+        )
+    path = Path(file_path)
+    if not path.exists() and path.parent.exists():
+        parent_directory = path.parent
+        similar_files = try_find_similar_files(path.name, parent_directory)
+        similar_files_formatted = ",".join([str(file) for file in similar_files])
+        if similar_files:
+            make_error(
+                f"File ({path}) does not exist. Did you mean any of these files: {similar_files_formatted}?"
+            )
+        make_error(f"File ({path}) does not exist")
+    elif not path.exists():
+        make_error(f"File ({path}) does not exist")
+    elif not path.is_file():
+        make_error(f"File ({path}) is not a file")
+
+    if audio_content_check and not check_audio_file(path):
+        make_error(f"File ({path}) is not an audio or video file")
+
+    return path
 
 
 def handle_input_file_paths(
@@ -199,20 +256,7 @@ def handle_input_file_paths(
         else:
             # For regular files, we need to validate the path but return the original path string
             # since the API expects file paths, not file handles
-            if not os.path.isabs(file_path) and not os.environ.get(
-                "ELEVENLABS_MCP_BASE_PATH"
-            ):
-                make_error(
-                    "File path must be an absolute path if ELEVENLABS_MCP_BASE_PATH is not set"
-                )
-            path = Path(file_path)
-            if not path.exists():
-                make_error(f"File ({path}) does not exist")
-            elif not path.is_file():
-                make_error(f"File ({path}) is not a file")
-            if audio_content_check and not check_audio_file(path):
-                make_error(f"File ({path}) is not an audio or video file")
-
+            path = _validate_local_file(file_path, audio_content_check)
             api_file_paths.append(str(path.absolute()))
 
     return api_file_paths, temp_files_to_cleanup
@@ -253,19 +297,7 @@ def create_file_like_from_data_uri(
 
     # Check if it's audio/video content if required
     if audio_content_check:
-        audio_extensions = {
-            "wav",
-            "mp3",
-            "m4a",
-            "aac",
-            "ogg",
-            "flac",
-            "mp4",
-            "avi",
-            "mov",
-            "wmv",
-        }
-        if file_extension not in audio_extensions:
+        if file_extension not in _AUDIO_EXTENSIONS_NO_DOT:
             make_error(
                 f"Data URI contains non-audio/video content (detected type: {media_type})"
             )
@@ -359,19 +391,7 @@ def try_find_similar_files(
 
 
 def check_audio_file(path: Path) -> bool:
-    audio_extensions = {
-        ".wav",
-        ".mp3",
-        ".m4a",
-        ".aac",
-        ".ogg",
-        ".flac",
-        ".mp4",
-        ".avi",
-        ".mov",
-        ".wmv",
-    }
-    return path.suffix.lower() in audio_extensions
+    return path.suffix.lower() in _AUDIO_EXTENSIONS
 
 
 def handle_input_file(
@@ -392,27 +412,7 @@ def handle_input_file(
         return create_file_like_from_data_uri(file_path, audio_content_check)
 
     # Original file path handling logic
-    if not os.path.isabs(file_path) and not os.environ.get("ELEVENLABS_MCP_BASE_PATH"):
-        make_error(
-            "File path must be an absolute path if ELEVENLABS_MCP_BASE_PATH is not set"
-        )
-    path = Path(file_path)
-    if not path.exists() and path.parent.exists():
-        parent_directory = path.parent
-        similar_files = try_find_similar_files(path.name, parent_directory)
-        similar_files_formatted = ",".join([str(file) for file in similar_files])
-        if similar_files:
-            make_error(
-                f"File ({path}) does not exist. Did you mean any of these files: {similar_files_formatted}?"
-            )
-        make_error(f"File ({path}) does not exist")
-    elif not path.exists():
-        make_error(f"File ({path}) does not exist")
-    elif not path.is_file():
-        make_error(f"File ({path}) is not a file")
-
-    if audio_content_check and not check_audio_file(path):
-        make_error(f"File ({path}) is not an audio or video file")
+    path = _validate_local_file(file_path, audio_content_check)
 
     # Return an open file handle
     file_handle = open(path, "rb")
@@ -509,22 +509,7 @@ def get_mime_type(file_extension: str) -> str:
     # Remove leading dot if present
     ext = file_extension.lstrip(".")
 
-    mime_types = {
-        "mp3": "audio/mpeg",
-        "wav": "audio/wav",
-        "ogg": "audio/ogg",
-        "flac": "audio/flac",
-        "m4a": "audio/mp4",
-        "aac": "audio/aac",
-        "opus": "audio/opus",
-        "txt": "text/plain",
-        "json": "application/json",
-        "xml": "application/xml",
-        "html": "text/html",
-        "csv": "text/csv",
-    }
-
-    return mime_types.get(ext.lower(), "application/octet-stream")
+    return _EXT_TO_MIME.get(ext.lower(), "application/octet-stream")
 
 
 def generate_resource_uri(filename: str) -> str:
@@ -659,11 +644,9 @@ def handle_multiple_files_output_mode(
                 # Extract file path from the success message
                 text = result.text
                 if "File saved as: " in text:
-                    path = (
-                        text.split("File saved as: ")[1].split(".")[0]
-                        + "."
-                        + text.split(".")[-1].split(" ")[0]
-                    )
+                    # This parsing is simple and assumes the path is the last part of the message.
+                    # It works for the default success message from handle_output_mode.
+                    path = text.split("File saved as: ")[1].strip()
                     file_paths.append(path)
 
         message = f"Success. Files saved at: {', '.join(file_paths)}"
