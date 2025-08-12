@@ -31,6 +31,7 @@ _AUDIO_EXTENSIONS_NO_DOT = {ext.lstrip(".") for ext in _AUDIO_EXTENSIONS}
 
 _MIME_TO_EXT = {
     "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
     "audio/wav": "wav",
     "audio/wave": "wav",
     "audio/x-wav": "wav",
