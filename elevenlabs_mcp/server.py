@@ -31,6 +31,8 @@ from elevenlabs_mcp.utils import (
     make_output_path,
     make_output_file,
     handle_input_file,
+    handle_input_file_paths,
+    cleanup_temp_files,
     parse_conversation_transcript,
     handle_large_text,
     get_mime_type,
@@ -244,12 +246,15 @@ def speech_to_text(
 ) -> TextContent:
     if not save_transcript_to_file and not return_transcript_to_client_directly:
         make_error("Must save transcript to file or return it to the client directly.")
-    file_path = handle_input_file(input_file_path)
+    file_handle = handle_input_file(input_file_path)
     if save_transcript_to_file:
         output_path = make_output_path(output_directory, base_path)
-        output_file_name = make_output_file("stt", file_path.name, output_path, "txt")
-    with file_path.open("rb") as f:
-        audio_bytes = f.read()
+        # Use a generic name for data URIs
+        file_name = getattr(file_handle, "name", "audio_input")
+        output_file_name = make_output_file("stt", file_name, output_path, "txt")
+
+    # Read from the file handle (always has read method now)
+    audio_bytes = file_handle.read()
     transcription = client.speech_to_text.convert(
         model_id="scribe_v1",
         file=audio_bytes,
@@ -400,18 +405,23 @@ def get_voice(voice_id: str) -> McpVoice:
 def voice_clone(
     name: str, files: list[str], description: str | None = None
 ) -> TextContent:
-    input_files = [str(handle_input_file(file).absolute()) for file in files]
-    voice = client.voices.ivc.create(
-        name=name, description=description, files=input_files
-    )
+    input_files, temp_files = handle_input_file_paths(files, audio_content_check=True)
 
-    return TextContent(
-        type="text",
-        text=f"""Voice cloned successfully: Name: {voice.name}
-        ID: {voice.voice_id}
-        Category: {voice.category}
-        Description: {voice.description or "N/A"}""",
-    )
+    try:
+        voice = client.voices.ivc.create(
+            name=name, description=description, files=input_files
+        )
+
+        return TextContent(
+            type="text",
+            text=f"""Voice cloned successfully: Name: {voice.name}
+            ID: {voice.voice_id}
+            Category: {voice.category}
+            Description: {voice.description or "N/A"}""",
+        )
+    finally:
+        # Always clean up temp files
+        cleanup_temp_files(temp_files)
 
 
 @mcp.tool(
@@ -423,11 +433,14 @@ def voice_clone(
 def isolate_audio(
     input_file_path: str, output_directory: str | None = None
 ) -> Union[TextContent, EmbeddedResource]:
-    file_path = handle_input_file(input_file_path)
+    file_handle = handle_input_file(input_file_path)
     output_path = make_output_path(output_directory, base_path)
-    output_file_name = make_output_file("iso", file_path.name, output_path, "mp3")
-    with file_path.open("rb") as f:
-        audio_bytes = f.read()
+    # Use a generic name for data URIs
+    file_name = getattr(file_handle, "name", "audio_input")
+    output_file_name = make_output_file("iso", file_name, output_path, "mp3")
+
+    # Read from the file handle (always has read method now)
+    audio_bytes = file_handle.read()
     audio_data = client.audio_isolation.convert(
         audio=audio_bytes,
     )
@@ -793,12 +806,14 @@ def speech_to_speech(
         make_error(f"Voice with name: {voice_name} does not exist.")
 
     assert voice is not None  # Type assertion for type checker
-    file_path = handle_input_file(input_file_path)
+    file_handle = handle_input_file(input_file_path)
     output_path = make_output_path(output_directory, base_path)
-    output_file_name = make_output_file("sts", file_path.name, output_path, "mp3")
+    # Use a generic name for data URIs
+    file_name = getattr(file_handle, "name", "audio_input")
+    output_file_name = make_output_file("sts", file_name, output_path, "mp3")
 
-    with file_path.open("rb") as f:
-        audio_bytes = f.read()
+    # Read from the file handle (always has read method now)
+    audio_bytes = file_handle.read()
 
     audio_data = client.speech_to_speech.convert(
         model_id="eleven_multilingual_sts_v2",
@@ -1040,9 +1055,16 @@ def list_phone_numbers() -> TextContent:
 
 @mcp.tool(description="Play an audio file. Supports WAV and MP3 formats.")
 def play_audio(input_file_path: str) -> TextContent:
-    file_path = handle_input_file(input_file_path)
-    play(open(file_path, "rb").read(), use_ffmpeg=False)
-    return TextContent(type="text", text=f"Successfully played audio file: {file_path}")
+    file_handle = handle_input_file(input_file_path)
+
+    # Read from the file handle (always has read method now)
+    audio_data = file_handle.read()
+    file_description = getattr(file_handle, "name", "data URI")
+
+    play(audio_data, use_ffmpeg=False)
+    return TextContent(
+        type="text", text=f"Successfully played audio file: {file_description}"
+    )
 
 
 def main():
